@@ -1,0 +1,33 @@
+FoPra 45 analysis summary
+=========================
+
+Calibration: lambda = 1.02091375 * raw + -9.39221 nm
+Calibration RMS residual: 0.656 nm
+
+AlGaAs peak wavelength: 656.083 nm
+AlGaAs peak energy: 1.88924 eV
+aluminium fraction x: 0.296746 
+bandgap difference Delta Eg: 0.370043 eV
+conduction-band offset Delta E_L: 0.240528 eV
+valence-band offset Delta E_V: 0.129515 eV
+GaAs substrate wavelength: 805.352 nm
+GaAs substrate energy: 1.53908 eV
+measured 3D exciton binding: -19.8789 meV
+theoretical 3D exciton binding: 4.81192 meV
+QW1 wavelength: 701.209 nm
+QW1 energy: 1.76766 eV
+QW1 finite-well width: 1.63625 nm
+QW1 infinite-well width: 5.20027 nm
+QW1 FWHM: 5.29903 nm
+QW2 wavelength: 771.993 nm
+QW2 energy: 1.60558 eV
+QW2 finite-well width: 5.04468 nm
+QW2 infinite-well width: 8.81896 nm
+QW2 FWHM: 3.80372 nm
+QW3 wavelength: 790.956 nm
+QW3 energy: 1.56709 eV
+QW3 finite-well width: 7.57189 nm
+QW3 infinite-well width: 11.8443 nm
+QW3 FWHM: 3.22227 nm
+mean measured spectral resolution: 2.87796 nm
+theoretical spectral resolution at 760 nm: 0.831978 nm
