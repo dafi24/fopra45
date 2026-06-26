@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """FoPra 45 data processing.
 
-Execute from the repository root with
+Run from the repository root:
 
     python process_fopra45.py
 
-The script creates analysis_output/ with calibration plots, processed spectra,
-temperature traces, quantum-well energy/width plots, results.csv, and summary.txt.
-Only numpy and matplotlib are required.
+Outputs are written to analysis_output/.  The script intentionally uses only
+numpy and matplotlib.  The data pipeline is:
+1. fit the He-Ne calibration lines,
+2. convert all spectra to counts/s and subtract the averaged background with
+   the same integration time,
+3. suppress isolated cosmic-ray spikes with a small median filter,
+4. track the multi-quantum-well peak during cooldown/warmup,
+5. average the bottom spectra separately for the 10 s and 30 s groups,
+6. extract AlGaAs, GaAs and QW peak energies and compare them with finite and
+   infinite well estimates.
 """
 from __future__ import annotations
 
@@ -29,22 +36,22 @@ VAR_A, VAR_B = 5.405e-4, 204.0
 EPS_GAAS, RYDBERG_EV = 12.58, 13.605693
 HBAR2_2M0 = 0.0380998212  # eV nm^2
 
-# Corrected handwritten/lab-note setup values.
-GRATING_LINES_MM = 150.0
-FOCAL_MM = 200.0
-SLIT_MM = 0.025
+GRATING_LINES_MM = 150.0  # corrected handwritten value
+FOCAL_MM = 200.0          # corrected handwritten value
+SLIT_MM = 0.025           # corrected handwritten value
 ORDER = 1
 
 KNOWN_LINES = np.array([710.0, 730.0, 733.0, 755.0, 760.0, 845.0])
 MEASURED_SEEDS = np.array([705.70, 723.66, 727.24, 747.97, 752.56, 836.87])
 ALGAAS_WIN = (630.0, 690.0)
 QW_WIN = (700.0, 815.0)
-GAAS_WIN = (805.0, 835.0)
-MQW_TEMP_WIN = (760.0, 840.0)
+GAAS_WIN = (812.0, 825.0)       # avoids the non-GaAs 805 nm shoulder
+MQW_TEMP_WIN = (755.0, 830.0)
+MQW_MAX_JUMP_NM = 7.0
+_BG_CACHE: dict[float, tuple[np.ndarray, np.ndarray] | None] = {}
 
 
 def read_xy(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Read two-column spectrometer CSV and sort by raw x-axis."""
     a = np.genfromtxt(path, delimiter=",", dtype=float)
     a = a[np.isfinite(a).all(axis=1)]
     order = np.argsort(a[:, 0])
@@ -52,7 +59,6 @@ def read_xy(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def exposure(path: Path) -> float:
-    """Integration time: explicit in bottom/background names, otherwise 5 s."""
     name = path.name.lower()
     if "30sec" in name:
         return 30.0
@@ -62,20 +68,17 @@ def exposure(path: Path) -> float:
 
 
 def smooth(y: np.ndarray, n: int = 7) -> np.ndarray:
-    if n <= 1:
-        return y.copy()
-    return np.convolve(y, np.ones(n) / n, mode="same")
+    return y.copy() if n <= 1 else np.convolve(y, np.ones(n) / n, mode="same")
 
 
 def despike(y: np.ndarray, n: int = 5) -> np.ndarray:
-    """Median filter suppresses one-bin cosmic-ray spikes mentioned in notes."""
+    """Remove isolated single-channel spikes without broadening real peaks much."""
     h = n // 2
     p = np.pad(y, (h, h), mode="edge")
     return np.array([np.median(p[i:i+n]) for i in range(len(y))])
 
 
 def vertex(x: np.ndarray, y: np.ndarray, i: int) -> float:
-    """Parabolic peak center from three points."""
     if i <= 0 or i >= len(x) - 1:
         return float(x[i])
     a, b, _ = np.polyfit(x[i-1:i+2], y[i-1:i+2], 2)
@@ -84,7 +87,6 @@ def vertex(x: np.ndarray, y: np.ndarray, i: int) -> float:
 
 
 def fwhm(x: np.ndarray, y: np.ndarray, i: int) -> float:
-    """Line width above local baseline, used as measured spectral resolution."""
     base = np.percentile(y, 10)
     half = base + 0.5 * (y[i] - base)
     l = i
@@ -100,8 +102,23 @@ def fwhm(x: np.ndarray, y: np.ndarray, i: int) -> float:
     return abs(float(xr - xl))
 
 
+def local_peaks(x: np.ndarray, y: np.ndarray, win: tuple[float, float]) -> list[tuple[float, float, float]]:
+    """Return local peaks as wavelength, FWHM and height in one window."""
+    m = (x >= win[0]) & (x <= win[1])
+    if m.sum() < 5:
+        return []
+    xx, yy = x[m], smooth(y[m])
+    noise = 1.4826 * np.median(np.abs(yy - np.median(yy)))
+    thr = np.percentile(yy, 20) + max(2.5 * noise, 0.03 * (yy.max() - np.percentile(yy, 20)))
+    cand = np.where((yy[1:-1] > yy[:-2]) & (yy[1:-1] >= yy[2:]) & (yy[1:-1] > thr))[0] + 1
+    out = [(vertex(xx, yy, int(i)), fwhm(xx, yy, int(i)), float(yy[i])) for i in cand]
+    return sorted(out, key=lambda p: p[2], reverse=True)
+
+
 def peak(x: np.ndarray, y: np.ndarray, win: tuple[float, float]) -> tuple[float, float]:
-    """Strongest peak center and FWHM in a wavelength window."""
+    found = local_peaks(x, y, win)
+    if found:
+        return found[0][0], found[0][1]
     m = (x >= win[0]) & (x <= win[1])
     if m.sum() < 5:
         return float("nan"), float("nan")
@@ -111,27 +128,17 @@ def peak(x: np.ndarray, y: np.ndarray, win: tuple[float, float]) -> tuple[float,
 
 
 def peaks(x: np.ndarray, y: np.ndarray, win: tuple[float, float], n: int = 6, dmin: float = 3.0) -> list[tuple[float, float]]:
-    """Well-separated local maxima: used for the QW luminescence lines."""
-    m = (x >= win[0]) & (x <= win[1])
-    xx, yy = x[m], smooth(y[m])
-    if len(xx) < 5:
-        return []
-    noise = 1.4826 * np.median(np.abs(yy - np.median(yy)))
-    thr = np.percentile(yy, 20) + max(3 * noise, 0.05 * (yy.max() - np.percentile(yy, 20)))
-    cand = np.where((yy[1:-1] > yy[:-2]) & (yy[1:-1] >= yy[2:]) & (yy[1:-1] > thr))[0] + 1
-    cand = cand[np.argsort(yy[cand])[::-1]]
     out: list[tuple[float, float]] = []
-    for i in cand:
-        xp = vertex(xx, yy, int(i))
-        if all(abs(xp - p[0]) >= dmin for p in out):
-            out.append((xp, fwhm(xx, yy, int(i))))
+    for lam, width, _ in local_peaks(x, y, win):
+        if all(abs(lam - p[0]) >= dmin for p in out):
+            out.append((lam, width))
         if len(out) == n:
             break
     return sorted(out)
 
 
 def make_calibration() -> tuple[np.ndarray, np.ndarray]:
-    """Fit raw spectrometer axis to He-Ne plasma literature lines."""
+    """Fit raw spectrometer axis to the He-Ne literature plasma lines."""
     x, y = read_xy(DATA / "LaserCalibration(5s).csv")
     measured = []
     for seed in MEASURED_SEEDS:
@@ -143,7 +150,7 @@ def make_calibration() -> tuple[np.ndarray, np.ndarray]:
     residual = np.polyval(coeff, measured) - KNOWN_LINES
 
     xc = np.polyval(coeff, x)
-    plt.figure(figsize=(9, 4))
+    plt.figure(figsize=(11, 4))
     plt.plot(xc, y / 5.0, lw=1)
     for lam in KNOWN_LINES:
         plt.axvline(lam, ls="--", alpha=0.35)
@@ -169,19 +176,24 @@ def make_calibration() -> tuple[np.ndarray, np.ndarray]:
 
 
 def background(sec: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Average all background files with the same integration time."""
+    if sec in _BG_CACHE:
+        return _BG_CACHE[sec]
     files = sorted((DATA / "noise_background").glob(f"{int(sec)}sec_*.csv"))
     if not files:
+        _BG_CACHE[sec] = None
         return None
     x0, y0 = read_xy(files[0])
     rates = [y0 / sec]
     for f in files[1:]:
         x, y = read_xy(f)
         rates.append(np.interp(x0, x, y / sec))
-    return x0, np.mean(rates, axis=0)
+    _BG_CACHE[sec] = (x0, np.mean(rates, axis=0))
+    return _BG_CACHE[sec]
 
 
 def corrected(path: Path, coeff: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Calibration -> counts/s -> background subtraction -> despiking."""
+    """Calibration -> counts/s -> same-exposure background subtraction -> despiking."""
     x, y = read_xy(path)
     sec = exposure(path)
     rate = y / sec
@@ -191,8 +203,29 @@ def corrected(path: Path, coeff: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.polyval(coeff, x), despike(rate)
 
 
-def numbered(folder: Path) -> list[Path]:
-    return sorted([p for p in folder.glob("*.csv") if p.stem.isdigit()], key=lambda p: int(p.stem))
+def average_files(files: list[Path], coeff: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Average corrected spectra after interpolation onto the first file grid."""
+    if not files:
+        raise ValueError("no files to average")
+    x0, y0 = corrected(files[0], coeff)
+    ys = [y0]
+    for f in files[1:]:
+        x, y = corrected(f, coeff)
+        ys.append(np.interp(x0, x, y))
+    return x0, np.mean(ys, axis=0)
+
+
+def bottom_groups(coeff: np.ndarray) -> dict[float, tuple[np.ndarray, np.ndarray]]:
+    """Average bottom-of-dewar spectra separately for 10 s and 30 s groups."""
+    groups: dict[float, list[Path]] = {}
+    for f in sorted((DATA / "cooldown").glob("bottom*sec_*.csv")):
+        groups.setdefault(exposure(f), []).append(f)
+    return {sec: average_files(files, coeff) for sec, files in groups.items()}
+
+
+def numbered(folder: Path, start: int = 1) -> list[Path]:
+    files = [p for p in folder.glob("*.csv") if p.stem.isdigit() and int(p.stem) >= start]
+    return sorted(files, key=lambda p: int(p.stem))
 
 
 def varshni(T: float, Eg0: float) -> float:
@@ -200,7 +233,6 @@ def varshni(T: float, Eg0: float) -> float:
 
 
 def temp_from_E(E: float, Eg0: float) -> float:
-    """Invert Eg(T)=Eg(0)-a*T^2/(T+b) by bisection."""
     if not np.isfinite(E):
         return float("nan")
     lo, hi = 0.0, 400.0
@@ -217,13 +249,31 @@ def temp_from_E(E: float, Eg0: float) -> float:
     return 0.5 * (lo + hi)
 
 
+def tracked_mqw_peak(x: np.ndarray, y: np.ndarray, previous: float | None) -> tuple[float, float]:
+    """Track the same MQW line rather than blindly taking the strongest peak."""
+    found = local_peaks(x, y, MQW_TEMP_WIN)
+    if not found:
+        return peak(x, y, MQW_TEMP_WIN)
+    if previous is None or not np.isfinite(previous):
+        return found[0][0], found[0][1]
+    close = [p for p in found if abs(p[0] - previous) <= MQW_MAX_JUMP_NM]
+    if close:
+        p = max(close, key=lambda q: q[2])
+        return p[0], p[1]
+    p = min(found, key=lambda q: abs(q[0] - previous))
+    return p[0], p[1]
+
+
 def series(name: str, coeff: np.ndarray) -> list[dict[str, float | str]]:
     """Process cooldown/warmup spectra and calculate MQW temperatures."""
-    files = numbered(DATA / name)
+    start = 7 if name == "warmup" else 1
+    files = numbered(DATA / name, start=start)
     rows = []
+    previous: float | None = None
     for f in files:
         x, y = corrected(f, coeff)
-        lam, w = peak(x, y, MQW_TEMP_WIN)
+        lam, w = tracked_mqw_peak(x, y, previous)
+        previous = lam
         rows.append({"series": name, "index": int(f.stem), "file": str(f.relative_to(ROOT)),
                      "lambda_nm": lam, "energy_eV": HC / lam, "fwhm_nm": w})
     if rows:
@@ -233,19 +283,19 @@ def series(name: str, coeff: np.ndarray) -> list[dict[str, float | str]]:
             r["temperature_K"] = temp_from_E(float(r["energy_eV"]), Eg0_eff)
             r["Eg0_eff_eV"] = Eg0_eff
 
-        plt.figure(figsize=(9, 5))
-        for j, f in enumerate(files):
+        plt.figure(figsize=(14, 5))
+        for f in files:
             x, y = corrected(f, coeff)
             scale = np.nanmax(np.abs(y)) or 1.0
-            plt.plot(x, y / scale + j, lw=0.8)
-        plt.xlabel("wavelength / nm"); plt.ylabel("normalized counts/s + offset")
-        plt.title(f"{name}: processed spectra"); plt.tight_layout()
-        plt.savefig(OUT / f"04_{name}_spectra.png", dpi=300); plt.close()
+            plt.plot(x, y / scale, lw=0.9, alpha=0.35)
+        plt.xlim(620, 850)
+        plt.xlabel("wavelength / nm"); plt.ylabel("normalized counts/s")
+        plt.title(f"{name}: processed spectra overlaid")
+        plt.tight_layout(); plt.savefig(OUT / f"04_{name}_spectra.png", dpi=300); plt.close()
     return rows
 
 
 def finite_even(L: float, mt: float, mB: float, V: float) -> float:
-    """Lowest even finite-well state from Eq. (16)."""
     if L <= 0 or V <= 0:
         return float("nan")
     lo = 1e-12
@@ -265,7 +315,7 @@ def finite_even(L: float, mt: float, mB: float, V: float) -> float:
 
 
 def exciton_mev(L: float, x: float) -> float:
-    """Heavy-hole 2D exciton correction, visually digitized from Fig. 10."""
+    """Heavy-hole 2D exciton correction digitized from Fig. 10."""
     Ltab = np.array([2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 40], float)
     e015 = np.array([5.9, 7.5, 8.1, 8.2, 8.0, 7.6, 7.3, 6.8, 6.4, 5.7, 5.2])
     e030 = np.array([6.6, 8.6, 9.4, 9.5, 9.2, 8.7, 8.3, 7.5, 6.8, 5.8, 5.3])
@@ -282,7 +332,6 @@ def invert_width(widths: np.ndarray, curve: np.ndarray, target: float) -> float:
 
 
 def resolution_theory(lam_nm: float = 760.0) -> float:
-    """Theoretical spectrometer resolution with corrected g, f and slit width."""
     lam = lam_nm * 1e-6
     g = 1 / GRATING_LINES_MM
     fac = math.sqrt(max(4 * g * g / (ORDER**2 * lam * lam) - 1, 0))
@@ -290,18 +339,22 @@ def resolution_theory(lam_nm: float = 760.0) -> float:
 
 
 def low_temperature(coeff: np.ndarray) -> list[dict[str, float | str]]:
-    """Use bottom spectra for Al content, offsets, QW widths and exciton values."""
-    files = sorted((DATA / "cooldown").glob("bottom*sec_*.csv")) or numbered(DATA / "cooldown")[-3:]
-    x0, y0 = corrected(files[0], coeff)
-    ys = [y0]
-    for f in files[1:]:
-        x, y = corrected(f, coeff)
-        ys.append(np.interp(x0, x, y))
-    x, y = x0, np.mean(ys, axis=0)
+    """Use grouped bottom spectra for Al content, offsets, QW widths and excitons."""
+    groups = bottom_groups(coeff)
+    if groups:
+        weak_sec = max(groups)    # 30 s: weak AlGaAs/GaAs features
+        strong_sec = min(groups)  # 10 s: intense QW features with less saturation risk
+        x_weak, y_weak = groups[weak_sec]
+        x_qw, y_qw = groups[strong_sec]
+    else:
+        files = numbered(DATA / "cooldown")[-3:]
+        x_weak, y_weak = average_files(files, coeff)
+        x_qw, y_qw = x_weak, y_weak
+        weak_sec = strong_sec = float("nan")
 
-    al_lam, _ = peak(x, y, ALGAAS_WIN)
-    gaas_lam, _ = peak(x, y, GAAS_WIN)
-    qw = peaks(x, y, QW_WIN, n=6)
+    al_lam, _ = peak(x_weak, y_weak, ALGAAS_WIN)
+    gaas_lam, _ = peak(x_weak, y_weak, GAAS_WIN)
+    qw = peaks(x_qw, y_qw, QW_WIN, n=6)
 
     E_al = HC / al_lam
     x_al = float(np.clip((E_al - EG_GAAS) / 1.247, 0, 0.6))
@@ -317,6 +370,8 @@ def low_temperature(coeff: np.ndarray) -> list[dict[str, float | str]]:
     infinite_curve = math.pi**2 * HBAR2_2M0 * (1 / me_w + 1 / mh_w) / L**2
 
     rows: list[dict[str, float | str]] = [
+        {"quantity": "bottom weak-line averaging group", "value": weak_sec, "unit": "s"},
+        {"quantity": "bottom strong-line averaging group", "value": strong_sec, "unit": "s"},
         {"quantity": "AlGaAs peak wavelength", "value": al_lam, "unit": "nm"},
         {"quantity": "AlGaAs peak energy", "value": E_al, "unit": "eV"},
         {"quantity": "aluminium fraction x", "value": x_al, "unit": ""},
@@ -352,22 +407,27 @@ def low_temperature(coeff: np.ndarray) -> list[dict[str, float | str]]:
         {"quantity": "theoretical spectral resolution at 760 nm", "value": resolution_theory(), "unit": "nm"},
     ]
 
-    plt.figure(figsize=(9, 5))
-    plt.plot(x, y, lw=1)
+    plt.figure(figsize=(12, 5))
+    for sec, (xb, yb) in sorted(groups.items()):
+        scale = np.nanmax(np.abs(yb)) or 1.0
+        plt.plot(xb, yb / scale, lw=1, alpha=0.75, label=f"bottom average {sec:g} s")
     for lam, label in [(al_lam, "AlGaAs"), (gaas_lam, "GaAs")]:
         if np.isfinite(lam):
-            plt.axvline(lam, ls="--", alpha=0.5); plt.text(lam, plt.ylim()[1]*0.92, label, rotation=90, va="top")
+            plt.axvline(lam, ls="--", alpha=0.5)
+            plt.text(lam, plt.ylim()[1]*0.92, label, rotation=90, va="top")
     for lam, _ in qw:
         plt.axvline(lam, ls=":", alpha=0.4)
-    plt.xlabel("wavelength / nm"); plt.ylabel("background-subtracted counts / s")
-    plt.title("Cold/bottom average spectrum with identified peaks")
-    plt.tight_layout(); plt.savefig(OUT / "06_bottom_average_peaks.png", dpi=300); plt.close()
+    plt.xlim(620, 850)
+    plt.xlabel("wavelength / nm"); plt.ylabel("normalized background-subtracted counts / s")
+    plt.title("Bottom-of-dewar grouped averages with identified peaks")
+    plt.legend(); plt.tight_layout(); plt.savefig(OUT / "06_bottom_average_peaks.png", dpi=300); plt.close()
 
     plt.figure(figsize=(7, 5))
     plt.plot(L, EG_GAAS + finite_curve, label="finite well + hh exciton correction")
     plt.plot(L, EG_GAAS + infinite_curve, label="infinite well")
     for i, (lam, _) in enumerate(qw, 1):
-        plt.axhline(HC / lam, ls="--", alpha=0.35); plt.text(L[-1], HC / lam, f" QW{i}", va="center")
+        plt.axhline(HC / lam, ls="--", alpha=0.35)
+        plt.text(L[-1], HC / lam, f" QW{i}", va="center")
     plt.xlabel("GaAs well width / nm"); plt.ylabel("transition energy / eV")
     plt.title("Quantum-well width estimate")
     plt.legend(); plt.tight_layout(); plt.savefig(OUT / "07_well_width_model.png", dpi=300); plt.close()
@@ -399,13 +459,13 @@ def main() -> None:
     coeff, resid = make_calibration()
     temps = series("cooldown", coeff) + series("warmup", coeff)
     if temps:
-        plt.figure(figsize=(7, 4))
+        plt.figure(figsize=(8, 4))
         for name in sorted({r["series"] for r in temps}):
             rr = [r for r in temps if r["series"] == name]
             plt.plot([r["index"] for r in rr], [r["temperature_K"] for r in rr], "o-", label=name)
         plt.xlabel("spectrum number"); plt.ylabel("temperature / K")
-        plt.title("Temperature from MQW luminescence"); plt.legend(); plt.tight_layout()
-        plt.savefig(OUT / "05_temperature_series.png", dpi=300); plt.close()
+        plt.title("Temperature from MQW luminescence")
+        plt.legend(); plt.tight_layout(); plt.savefig(OUT / "05_temperature_series.png", dpi=300); plt.close()
     values = low_temperature(coeff)
     write_tables(coeff, resid, values, temps)
     print(f"Done. See {OUT.relative_to(ROOT)}/")
