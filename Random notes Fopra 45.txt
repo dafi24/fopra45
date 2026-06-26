@@ -1,0 +1,41 @@
+5 second exposure for laser clibration
+5 second exposure cool down
+Bottom integration peak 10s
+Bottom 30s avg over
+
+
+
+Average over several spectra
+
+Smaller peaks smaller time
+As big peak saturates and skews the scale for long time
+
+
+Warmup 1 is coldest
+Actually a started warming up at 7
+
+Noise source - cosmic rays
+
+
+
+Execution binding energy should be h squared (not hear)
+
+Different spectrometer - grating 150
+Focal 20cm
+Slit width 25 microns
+
+Questions apply the calibration to get sensible values
+About a 12nm shift
+
+Fit series peak position for different ‘temperatures’
+
+Energy of zero T is given, put as fitting parameter if you want
+
+
+From actual graph, get peak
+And measure x aluminium content
+
+Exciting binding energy shifts peak (and show plot of that area even if no peak)
+
+Binding energy of quantum well, use formula given for finite well, or retrieve from plot
+Website webplotdigitiser.io to get fit of plot in report
