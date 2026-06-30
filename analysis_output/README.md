@@ -28,9 +28,13 @@ Overlays the processed cooldown spectra.  Each spectrum is converted to counts p
 
 Overlays the processed warmup spectra using the same normalization and background-subtraction pipeline as the cooldown plot.  The script starts the warmup series at file number 7 because earlier spectra did not show visible heating effects.  This plot is a backup/qualitative temperature-series diagnostic; the cooldown series should usually be preferred for the report if it is cleaner.
 
-## `05_temperature_series.png`
+## `05_cooldown_temperature_series.png`
 
-Shows the temperature estimate extracted from the multi-quantum-well luminescence peak for the cooldown and warmup series.  The script tracks the MQW peak and converts its energy with the Varshni relation.  This plot should be interpreted cautiously: the experiment manual states that temperature is inferred indirectly from luminescence, and the lab notes indicate that this temperature measurement is expected to be inaccurate.  Sudden spikes usually mean that the automatic peak tracker jumped to another spectral line or that a line became too weak/broad to locate reliably.
+Shows the temperature estimate extracted from the multi-quantum-well luminescence peak for the cooldown series only.  The cooldown x-axis is intentionally reversed: the tick labels are the original spectrum numbers in reversed order, so the plot follows the requested cooldown ordering.  The y-values are not recalculated or changed by this display choice.  The temperature should still be interpreted cautiously because the experiment infers temperature indirectly from luminescence.
+
+## `05_warmup_temperature_series.png`
+
+Shows the temperature estimate extracted from the multi-quantum-well luminescence peak for the warmup series only.  The warmup x-axis uses the original increasing spectrum-number order.  The warmup data start at file number 7 because earlier files did not show visible heating effects.
 
 ## `06_bottom_average_peaks.png`
 

@@ -455,17 +455,48 @@ def write_tables(cal_coeff: np.ndarray, cal_resid: np.ndarray, values: list[dict
             f.write(f"{r['quantity']}: {v:.6g} {r['unit']}\n" if isinstance(v, float) else f"{r['quantity']}: {v} {r['unit']}\n")
 
 
+def plot_temperature_series(temps: list[dict[str, float | str]]) -> None:
+    """Write separate cooldown and warmup temperature plots.
+
+    Cooldown is plotted in reversed spectrum order, as requested by the lab
+    discussion.  The y-values are unchanged; only the display order on the
+    x-axis is flipped so the cooling trajectory reads from warm to cold.
+    """
+    old_combined = OUT / "05_temperature_series.png"
+    if old_combined.exists():
+        old_combined.unlink()
+
+    for name, filename in [
+        ("cooldown", "05_cooldown_temperature_series.png"),
+        ("warmup", "05_warmup_temperature_series.png"),
+    ]:
+        rows = sorted([r for r in temps if r["series"] == name], key=lambda r: int(r["index"]))
+        if not rows:
+            continue
+        plot_rows = list(reversed(rows)) if name == "cooldown" else rows
+        x = list(range(1, len(plot_rows) + 1))
+        plt.figure(figsize=(8, 4))
+        plt.plot(x, [r["temperature_K"] for r in plot_rows], "o-")
+        plt.xlabel("cooldown spectrum order (reversed)" if name == "cooldown" else "spectrum number")
+        plt.ylabel("temperature / K")
+        plt.title(f"Temperature from MQW luminescence: {name}")
+        if name == "cooldown":
+            labels = [str(int(r["index"])) for r in plot_rows]
+            step = max(1, len(labels) // 8)
+            ticks = x[::step]
+            tick_labels = labels[::step]
+            if ticks[-1] != x[-1]:
+                ticks.append(x[-1]); tick_labels.append(labels[-1])
+            plt.xticks(ticks, tick_labels)
+            plt.xlabel("original cooldown spectrum number, reversed")
+        plt.tight_layout(); plt.savefig(OUT / filename, dpi=300); plt.close()
+
+
 def main() -> None:
     coeff, resid = make_calibration()
     temps = series("cooldown", coeff) + series("warmup", coeff)
     if temps:
-        plt.figure(figsize=(8, 4))
-        for name in sorted({r["series"] for r in temps}):
-            rr = [r for r in temps if r["series"] == name]
-            plt.plot([r["index"] for r in rr], [r["temperature_K"] for r in rr], "o-", label=name)
-        plt.xlabel("spectrum number"); plt.ylabel("temperature / K")
-        plt.title("Temperature from MQW luminescence")
-        plt.legend(); plt.tight_layout(); plt.savefig(OUT / "05_temperature_series.png", dpi=300); plt.close()
+        plot_temperature_series(temps)
     values = low_temperature(coeff)
     write_tables(coeff, resid, values, temps)
     print(f"Done. See {OUT.relative_to(ROOT)}/")
