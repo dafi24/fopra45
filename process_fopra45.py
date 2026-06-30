@@ -488,7 +488,7 @@ def plot_temperature_series(temps: list[dict[str, float | str]]) -> None:
             if ticks[-1] != x[-1]:
                 ticks.append(x[-1]); tick_labels.append(labels[-1])
             plt.xticks(ticks, tick_labels)
-            plt.xlabel("original cooldown spectrum number, reversed")
+            plt.xlabel("spectrum number")
         plt.tight_layout(); plt.savefig(OUT / filename, dpi=300); plt.close()
 
 
