@@ -1,0 +1,33 @@
+quantity,value,unit
+calibration slope,1.0209137534220232,nm/raw-nm
+calibration intercept,-9.392205031327343,nm
+calibration RMS residual,0.6563649715767451,nm
+bottom weak-line averaging group,30.0,s
+bottom strong-line averaging group,10.0,s
+AlGaAs peak wavelength,656.1089277648007,nm
+AlGaAs peak energy,1.8891680139495541,eV
+aluminium fraction x,0.29668645866042825,
+bandgap difference Delta Eg,0.3699680139495541,eV
+conduction-band offset Delta E_L,0.24047920906721015,eV
+valence-band offset Delta E_V,0.12948880488234393,eV
+GaAs substrate wavelength,824.8474685774789,nm
+GaAs substrate energy,1.5027020718601771,eV
+measured 3D exciton binding,16.49792813982298,meV
+theoretical 3D exciton binding,4.8119232924952,meV
+QW1 wavelength,701.3129293854342,nm
+QW1 energy,1.7673993278381208,eV
+QW1 finite-well width,1.6390105035763785,nm
+QW1 infinite-well width,5.2030147160197044,nm
+QW1 FWHM,3.814227989374217,nm
+QW2 wavelength,772.0262500982326,nm
+QW2 energy,1.6055153563007554,eV
+QW2 finite-well width,5.047539152391165,nm
+QW2 infinite-well width,8.822466871983998,nm
+QW2 FWHM,3.955172083345701,nm
+QW3 wavelength,790.9446368634844,nm
+QW3 energy,1.5671134770131014,eV
+QW3 finite-well width,7.569398887337854,nm
+QW3 infinite-well width,11.841443022956472,nm
+QW3 FWHM,3.2860275014844547,nm
+mean measured spectral resolution,2.8779550186064093,nm
+theoretical spectral resolution at 760 nm,0.8319784819599871,nm
